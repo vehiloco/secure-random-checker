@@ -1,0 +1,138 @@
+plugins {
+    id 'java'
+    // Plugin that applies Google-Java-format to the Java files in the project.
+    // https://github.com/sherter/google-java-format-gradle-plugin
+    id 'com.github.sherter.google-java-format' version '0.8'
+}
+
+ext {
+    jsr308 = System.getenv('JSR308') ?: file(new File("..")).absolutePath
+    cfPath = "${jsr308}/checker-framework"
+    afu = "${jsr308}/annotation-tools/annotation-file-utilities"
+    secureRandomPath = "${jsr308}/secure-random-checker"
+}
+
+println '==================================='
+println '       Secure Random Checker       '
+println '==================================='
+println ''
+println '-------------------------------'
+println 'Important Environment Variables'
+println '-------------------------------'
+println 'JSR308: ' + jsr308
+println 'CF:     ' + cfPath
+
+repositories {
+    jcenter()
+    mavenCentral()
+}
+
+dependencies {
+    compile fileTree(dir: "${cfPath}/checker/dist", include: "checker.jar")
+    // CF test lib dependency
+    testCompile fileTree(dir: "${cfPath}/framework-test/build/libs", include: "framework-test-*.jar")
+    testCompile 'junit:junit:4.13'
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ["src/main/java"]
+        }
+
+        resources {
+            srcDirs = ["src/main/java"]
+            exclude "**/*.java"
+        }
+    }
+
+    test {
+        java {
+            srcDirs = ["src/test/java"]
+        }
+    }
+}
+
+compileJava {
+    options.compilerArgs = [
+            '-implicit:class',
+            '-Awarns',
+            '-Xmaxwarns', '10000',
+    ]
+}
+
+afterEvaluate {
+    // Create a task for each JUnit test class whose name is the same as the JUnit class name.
+    sourceSets.test.allJava.filter { it.path.contains("${secureRandomPath}/tests") }.forEach { file ->
+        String junitClassName = file.name.replaceAll(".java", "")
+        String testName = junitClassName.replaceAll("Test", "")
+        tasks.create(name: "${junitClassName}", type: Test) {
+            description "Run ${testName} tests."
+            include "**/${name}.class"
+        }
+    }
+
+    // Configure JUnit tests
+    tasks.withType(Test) {
+        group 'Verification'
+
+        systemProperties = [
+                'path.afu.scripts': "${afu}/scripts",
+        ]
+
+        if (JavaVersion.current() == JavaVersion.VERSION_1_8) {
+            systemProperties += [JDK_JAR: "${cfPath}/checker/dist/jdk8.jar"]
+            jvmArgs "-Xbootclasspath/p:${cfPath}/checker/dist/javac.jar"
+        }
+
+        environment "external_checker_classpath", "${secureRandomPath}/build/classes/java/main:" +
+                "${secureRandomPath}/build/libs/secure-random-checker.jar"
+
+        testLogging {
+            // Always run the tests
+            outputs.upToDateWhen { false }
+            // The following prints out each time a test is passed.
+            events "passed", "skipped", "failed", "standardOut", "standardError"
+
+            // Show the found unexpected diagnostics and expected diagnostics not found.
+            exceptionFormat "full"
+            showExceptions true
+            showCauses true
+            showStackTraces true
+            showStandardStreams true
+        }
+
+        // After each test, print a summary.
+        afterSuite { desc, result ->
+            if (desc.getClassName() != null) {
+                long mils = result.getEndTime() - result.getStartTime()
+                double seconds = mils / 1000.0
+
+                println "Testsuite: ${desc.getClassName()}\n" +
+                        "Tests run: ${result.testCount}, " +
+                        "Failures: ${result.failedTestCount}, " +
+                        "Skipped: ${result.skippedTestCount}, " +
+                        "Time elapsed: ${seconds} sec\n"
+            }
+        }
+    }
+}
+
+tasks.clean {
+    delete += "build"
+    delete += "dist"
+}
+
+/* Configuration for formatting */
+googleJavaFormat {
+    // toolVersion '1.3'
+    options style: 'AOSP'
+}
+tasks.googleJavaFormat {
+    group 'Formatting'
+    description = "Reformat Java source code with Google-Java-format"
+}
+tasks.verifyGoogleJavaFormat {
+    group 'Formatting'
+    description = "Check Java source code is in Google-Java-format"
+}
